@@ -1,4 +1,5 @@
 #include "attn.h"
+#include "simd.h"
 
 #include <algorithm>
 #include <cmath>
@@ -12,11 +13,7 @@ namespace {
 void score_row(const float* q, const float* k, int n, int d, int i,
                float scale, float* s) {
     for (int j = 0; j < n; j++) {
-        float dot = 0.0f;
-        for (int t = 0; t < d; t++) {
-            dot += q[i * d + t] * k[j * d + t];
-        }
-        s[j] = dot * scale;
+        s[j] = simd::dot(q + i * d, k + j * d, d) * scale;
     }
 }
 
@@ -87,10 +84,8 @@ void flash_attention(const float* q, const float* k, const float* v,
                         s[i * bk + j] = neg_inf;
                         continue;
                     }
-                    float dot = 0.0f;
-                    for (int t = 0; t < d; t++) {
-                        dot += q[gi * d + t] * k[gj * d + t];
-                    }
+                    float dot =
+                        simd::dot(q + gi * d, k + gj * d, d);
                     s[i * bk + j] = dot * scale;
                 }
             }
@@ -112,13 +107,13 @@ void flash_attention(const float* q, const float* k, const float* v,
                     row_sum += p;
                 }
                 l[i] = alpha * l[i] + row_sum;
-                for (int t = 0; t < d; t++) {
-                    float acc = 0.0f;
-                    for (int j = 0; j < bk; j++) {
-                        acc += s[i * bk + j] * v[(kb + j) * d + t];
-                    }
-                    o[(qb + i) * d + t] =
-                        alpha * o[(qb + i) * d + t] + acc;
+                // rescale the partial output, then add each v row
+                // scaled by its softmax weight, one contiguous axpy
+                // per row instead of a strided loop over t
+                float* out_row = o + (qb + i) * d;
+                for (int t = 0; t < d; t++) out_row[t] *= alpha;
+                for (int j = 0; j < bk; j++) {
+                    simd::axpy(s[i * bk + j], v + (kb + j) * d, out_row, d);
                 }
                 m[i] = m_new;
             }
