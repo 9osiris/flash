@@ -2,7 +2,8 @@ flash - flash attention from scratch, no libraries [educational project]
 
 disclaimer:
 this is a toy, not a real inference kernel. it is float32 on one cpu
-thread, there is no gpu, no simd, no bf16 here. i built it to
+thread, there is no gpu, no bf16 here. simd is in now, avx2 dot and
+axpy helpers behind make simd, but it is still a toy. i built it to
 understand how flash attention actually works, not to serve
 anything. dont use it for real inference.
 
@@ -26,6 +27,9 @@ the guide:
 build it:
   make
 
+build it with avx2:
+  make simd
+
 run the demo:
   ./flash demo
 
@@ -40,10 +44,13 @@ run the tests:
 
 verify prints the max abs diff between flash and naive, it should be
 around 1e-7. bench prints naive ms, flash ms, and the speedup. on
-this box flash runs about 2.1x faster at n=512 and 2.4x at n=2048,
-and that is just from not writing the score matrix to memory. the
-attention code is in src/attn.h and src/attn.cpp, the cli is
-src/main.cpp.
+this box flash runs about 1.7x faster at n=512 and 1.8x at n=2048
+in the plain build, and that is just from not writing the score
+matrix to memory. make simd builds the same code with -mavx2 -mfma
+and the dot and pv loops run 8 floats at a time: flash drops to
+5.7 ms at n=512 and 90 ms at n=2048, about 3x faster than the
+scalar flash. the attention code is in src/attn.h and src/attn.cpp,
+the simd helpers are in src/simd.h, the cli is src/main.cpp.
 
 what it does:
 - naive attention, full n by n scores, stable softmax, causal mask
@@ -51,6 +58,8 @@ what it does:
   and running sum, same output as naive to float precision
 - causal masking in both paths, scale defaults to 1/sqrt(d)
 - multi-head wrapper, each head independent, flash or naive per call
+- avx2 dot and axpy helpers in src/simd.h, used by the score and pv
+  loops in both paths, scalar fallback when built without -mavx2
 - block sizes are knobs, try 8, 16, 32, 64 and watch the diff stay
   tiny and the timing move
 - verify and bench commands with a seeded rng so runs are repeatable
@@ -58,12 +67,16 @@ what it does:
 numbers from my box:
 - verify 512x64 causal: max abs diff 0.00000013
 - verify 1024x64 no mask: max abs diff 0.00000012
-- bench 512x64: naive 35.76 ms, flash 16.73 ms, 2.14x
-- bench 2048x64: naive 600.63 ms, flash 250.59 ms, 2.40x
+- bench 512x64 scalar: naive 30.60 ms, flash 18.33 ms, 1.67x
+- bench 2048x64 scalar: naive 483.60 ms, flash 270.82 ms, 1.79x
+- bench 512x64 avx2: naive 21.74 ms, flash 5.72 ms, 3.80x
+- bench 2048x64 avx2: naive 357.36 ms, flash 90.35 ms, 3.96x
 
 tests:
-26 checks, all passing. flash vs naive across shapes (2x2 up to
-129x32), block sizes from 2 to 64, d=1 to d=128, causal and not.
+104 checks, all passing. flash vs naive across shapes (2x2 up to
+512x64), block sizes from 2 to 64, d=1 to d=128, causal and not.
+the simd dot and axpy helpers match plain scalar loops at 15
+lengths from 1 to 128, including the non-multiple-of-8 tails.
 causal rows provably ignore later keys. outputs stay inside the v
 range because they are convex combos. huge scores stay finite
 because of the running max. deterministic across runs, heads are
