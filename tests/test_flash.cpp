@@ -1,4 +1,5 @@
 #include "../src/attn.h"
+#include "../src/simd.h"
 
 #include <cmath>
 #include <cstdio>
@@ -261,6 +262,55 @@ int main() {
         check(close(max_abs_diff(a, b, 3, 1), 2.0f, 1e-6f),
               "max_abs_diff finds the worst element");
     }
+
+    // simd helpers match the plain scalar loops, including lengths
+    // that are not a multiple of 8, where the vector tail runs out
+    {
+        const int lens[] = {1, 2, 3, 5, 7, 8, 9, 15, 16, 17,
+                            31, 32, 33, 64, 128};
+        const float alphas[] = {0.0f, 1.0f, -1.5f, 2.25f};
+        Rng rng(101);
+        for (int li = 0; li < 15; li++) {
+            int d = lens[li];
+            std::vector<float> a(d), b(d), y(d), y_ref(d);
+            for (int i = 0; i < d; i++) {
+                a[i] = rng.uniform(-2, 2);
+                b[i] = rng.uniform(-2, 2);
+                y[i] = rng.uniform(-2, 2);
+                y_ref[i] = y[i];
+            }
+            float ref = 0.0f;
+            for (int i = 0; i < d; i++) ref += a[i] * b[i];
+            char name[64];
+            snprintf(name, sizeof(name), "simd dot matches scalar d=%d", d);
+            check(close(simd::dot(a.data(), b.data(), d), ref, 1e-5f),
+                  name);
+            for (int ai = 0; ai < 4; ai++) {
+                float alpha = alphas[ai];
+                for (int i = 0; i < d; i++) y_ref[i] = y[i] + alpha * a[i];
+                std::vector<float> y2 = y;
+                simd::axpy(alpha, a.data(), y2.data(), d);
+                snprintf(name, sizeof(name),
+                         "simd axpy matches scalar d=%d alpha=%.2f", d,
+                         alpha);
+                check(max_abs_diff(y2.data(), y_ref.data(), d, 1) < 1e-6f,
+                      name);
+            }
+        }
+    }
+
+    // the flag matches how this binary was built
+    {
+#if defined(__AVX2__)
+        check(simd::simd_available(), "simd_available true with avx2");
+#else
+        check(!simd::simd_available(), "simd_available false without avx2");
+#endif
+    }
+
+    // bigger shapes, so the restructured pv loop cant drift quietly
+    compare_random(256, 64, true, 32, 32, "flash matches naive 256x64 causal");
+    compare_random(512, 64, false, 32, 32, "flash matches naive 512x64");
 
     printf("%d passed, %d failed\n", passed, failed);
     return failed ? 1 : 0;
