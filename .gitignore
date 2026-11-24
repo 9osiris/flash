@@ -1,3 +1,5 @@
 flash
 test_flash
+flash_simd
+test_flash_simd
 *.o
