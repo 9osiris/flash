@@ -1,4 +1,5 @@
 #include "attn.h"
+#include "simd.h"
 
 #include <chrono>
 #include <cstdio>
@@ -8,7 +9,7 @@
 
 using namespace flash;
 
-static const char* kVersion = "1.0.0";
+static const char* kVersion = "1.1.0";
 
 static void usage() {
     printf("flash %s - flash attention from scratch\n", kVersion);
@@ -107,8 +108,15 @@ static int bench(int n, int d) {
     printf("naive: %.2f ms\n", t_naive);
     printf("flash: %.2f ms\n", t_flash);
     printf("speedup: %.2fx\n", t_naive / t_flash);
-    printf("note: this box is one thread and no simd, the win here is\n");
-    printf("memory traffic, not flops. on a gpu the gap is much bigger.\n");
+    if (simd::simd_available()) {
+        printf("note: built with avx2+fma, the dot and pv loops run\n");
+        printf("8 floats at a time. build plain with make for the\n");
+        printf("scalar version and compare.\n");
+    } else {
+        printf("note: this box is one thread and no simd, the win here is\n");
+        printf("memory traffic, not flops. run make simd for the avx2\n");
+        printf("build. on a gpu the gap is much bigger.\n");
+    }
     return 0;
 }
 
